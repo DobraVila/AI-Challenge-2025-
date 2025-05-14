@@ -4,18 +4,6 @@ output: html_document
 date: "2025-05-12"
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-```{r}
-install.packages("raster")
-install.packages("elevatr")
-install.packages("rdhs")
-install.packages("WDI")
-install.packages("chirps")
-```
-
 ```{r}
 library(malariaAtlas)
 library(dplyr)
@@ -27,7 +15,6 @@ library(raster)
 library(elevatr)
 library(WDI)
 library(chirps)
-#library(MODIStsp)
 library(gimms)
 library(conflicted)
 library(keras)
@@ -401,8 +388,6 @@ outcome_variable_pr_data.cleaned <- outcome_variable_pr_data %>%
 
 ```
 
-
-## !!HERE is the dataset needed for the second part
 ## 1. First dataset = Combine target and feature datasets based on year and country
 ```{r}
 df_1 <- outcome_variable_pr_data.cleaned %>%
