@@ -35,4 +35,15 @@ This project focuses on:
 - **Visualization**: ggplot2, SHAP
 - **Imputation**: No imputation was done as XGBoost model is well able to handle missing values (see [here](https://ieeexplore.ieee.org/document/9299012) )
 
+## Datasets
+The datasets were obtained from here:
+https://ourworldindata.org/grapher/average-monthly-surface-temperature
+https://ourworldindata.org/grapher/average-precipitation-per-year
+https://github.com/malaria-atlas-project/malariaAtlas/blob/master/README.md
+https://ourworldindata.org/grapher/proportion-using-safely-managed-drinking-water
+https://ourworldindata.org/global-education
+https://ourworldindata.org/grapher/population-density
+https://ourworldindata.org/health-meta
+https://ourworldindata.org/climate-change
+
 *This repository is part of the AI Challenge 2025.*
