@@ -1,0 +1,860 @@
+---
+title: "AI challenge"
+output: html_document
+date: "2025-05-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+install.packages("raster")
+install.packages("elevatr")
+install.packages("rdhs")
+install.packages("WDI")
+install.packages("chirps")
+```
+
+```{r}
+library(malariaAtlas)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(tidyr)
+library(rdhs)
+library(raster)
+library(elevatr)
+library(WDI)
+library(chirps)
+#library(MODIStsp)
+library(gimms)
+library(conflicted)
+library(keras)
+library(tensorflow)
+library(abind)
+library(tidymodels)
+library(splines)
+
+
+conflicts_prefer(dplyr::select)
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::intersect)
+```
+
+## Parasite rate (PR) obtained from malariaAtlas for every continent in the world 
+```{r, results = 'hide', warning=FALSE, message=FALSE}
+Oceania_pr_data <- getPR(continent = "Oceania", species = "both")
+Americas_pr_data <- getPR(continent = "Americas", species = "both")
+Asia_pr_data <- getPR(continent = "Asia", species = "both")
+Africa_pr_data <- getPR(continent = "Africa", species = "both")
+```
+## Outcome measure
+```{r}
+outcome_variable_pr_data <- bind_rows(
+  Oceania_pr_data,
+  Americas_pr_data,
+  Asia_pr_data,
+  Africa_pr_data
+) %>%
+  select(
+    -dhs_id,
+    -site_id,
+    -site_name,
+    -latitude,
+    -longitude,
+    -country_id,
+    -month_end, 
+    -month_start, 
+    -year_end, 
+    -lower_age, 
+    -upper_age, 
+    -method, 
+    -rdt_type,
+    -pcr_type,
+    -malaria_metrics_available,
+    -location_available,
+    -permissions_info,
+    -citation1,
+    -citation2,
+    -citation3,
+  ) %>%
+  rename(
+    Year = year_start)
+```
+
+```{r}
+glimpse(outcome_variable_pr_data)
+```
+## Features
+```{r}
+
+
+base_path <- "D:\\NUIG\\AI challenge\\datasets\\"
+
+Annual_temp_annomalies <- read.csv(paste0(base_path, "annual-temperature-anomalies.csv"))
+Vaccine <- read.csv(paste0(base_path, "perception-of-the-safety-of-vaccines-vs-vaccine-coverage.csv"))
+Sanitation <- read.csv(paste0(base_path, "share-using-safely-managed-sanitation.csv"))
+Health_expenditure <- read.csv(paste0(base_path, "public-health-expenditure-share-gdp.csv"))
+Pop_density <- read.csv(paste0(base_path, "population-density.csv"))
+Education_lvl <- read.csv(paste0(base_path, "share-of-the-world-population-with-at-least-basic-education.csv"))
+Drinking_water <- read.csv(paste0(base_path, "share-of-the-population-using-safely-managed-drinking-water-sources.csv"))
+Poverty_proxy <- read.csv(paste0(base_path, "poverty-share-on-less-than-30-per-day.csv"))
+Water_quality <- read.csv(paste0(base_path, "Water_bodies_good_water_quality.csv"))
+Surface_temp <- read.csv(paste0(base_path, "Average_surface_temperature.csv"))
+Avg_precipitation <- read.csv(paste0(base_path, "Average_precipitation.csv"))
+```
+
+## 1st dataset: Feature dataset cleaning & NA inspection
+```{r}
+
+# Annual_temp_annomalies
+Annual_temp_annomalies <- Annual_temp_annomalies %>% 
+  select(
+    -Code) %>%
+  rename(
+    Temp_anomaly = Temperature.anomaly) %>%
+  mutate(
+    Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_"))
+
+cat("Annual_temp_annomalies - number of NA values:", sum(is.na(Annual_temp_annomalies$Temp_anomaly)), "| number of non-NA values:", sum(!is.na(Annual_temp_annomalies$Temp_anomaly)), "\n")
+
+## Vaccine
+Vaccine <- Vaccine %>% 
+  rename(
+    Share_vaccinated_children = Share.of.one.year.olds.who.have.received.three.doses.of.combined.diphtheria..tetanus.toxoid.and.pertussis.containing.vaccine..DTP3.,
+    Share_vaccine_is_safe = Share...Question..q25...Vaccines.are.safe...Answer..Disagree...Gender..all...Age.group..all) %>%
+  mutate(
+    Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(-Code,
+         -World.regions.according.to.OWID)
+
+cat("Share_vaccinated_children - number of NA values:", sum(is.na(Vaccine$Share_vaccinated_children)), "| number of non-NA values:", sum(!is.na(Vaccine$Share_vaccinated_children)), "\n")
+
+cat("Share_vaccine_is_safe - number of NA values:", sum(is.na(Vaccine$Share_vaccine_is_safe)), "| number of non-NA values:", sum(!is.na(Vaccine$Share_vaccine_is_safe)), "\n")
+
+## Sanitation
+Sanitation <- Sanitation %>% 
+  rename(
+    Share_pop_safe_sanitation = Share.of.the.population.using.safely.managed.sanitation.services) %>%
+  mutate(
+    Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(
+    -Code)
+
+cat("Share_pop_safe_sanitation - number of NA values:", sum(is.na(Sanitation$Share_pop_safe_sanitation)), "| number of non-NA values:", sum(!is.na(Sanitation$Share_pop_safe_sanitation)), "\n")
+
+## Health_expenditure
+Health_expenditure <- Health_expenditure %>% 
+  rename(
+    Health_expenditures = Public.health.expenditure.as.a.share.of.GDP) %>%
+  mutate(
+    Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(
+    -Code) 
+
+cat("Health_expenditures - number of NA values:", sum(is.na(Health_expenditure$Health_expenditures)), "| number of non-NA values:", sum(!is.na(Health_expenditure$Health_expenditures)), "\n")
+
+## Pop_density
+Pop_density <- Pop_density %>%
+  rename(
+    Pop_density = Population.density) %>%
+  mutate(
+    Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(
+    -Code) 
+
+cat("Pop_density - number of NA values:", sum(is.na(Pop_density$Pop_density)), "| number of non-NA values:", sum(!is.na(Pop_density$Pop_density)), "\n")
+
+## Education_lvl
+Education_lvl <- Education_lvl %>% 
+  rename(
+    Share_no_education = Share.of.population.with.no.education,
+    Share_basic_education = Share.of.population.with.at.least.some.basic.education) %>%
+  mutate(
+    Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(
+    -Code)
+
+cat("Pop_density - number of NA values:", sum(is.na(Pop_density$Pop_density)), "| number of non-NA values:", sum(!is.na(Pop_density$Pop_density)), "\n")
+
+## Drinking_water
+Drinking_water <- Drinking_water %>%
+  rename(
+    Share_pop_drinking_water = Usage.of.safely.managed.drinking.water.services) %>%
+  mutate(
+        Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) 
+
+cat("Share_pop_drinking_water - number of NA values:", sum(is.na(Drinking_water$Share_pop_drinking_water)), "| number of non-NA values:", sum(!is.na(Drinking_water$Share_pop_drinking_water)), "\n")
+
+## Poverty_proxy  
+Poverty_proxy <- Poverty_proxy %>%
+  rename(
+      Share_pop_poverty = X.30.a.day...Share.of.population.in.poverty) %>%
+  mutate(
+      Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(
+    -Code,
+    -X990306.annotations) 
+
+cat("Share_pop_poverty - number of NA values:", sum(is.na(Poverty_proxy$Share_pop_poverty)), "| number of non-NA values:", sum(!is.na(Poverty_proxy$Share_pop_poverty)), "\n")
+
+## Water_quality
+Water_quality <- Water_quality %>%
+  rename(
+    Prop_good_quality_water = X6.3.2...Proportion.of.bodies.of.water.with.good.ambient.water.quality.......EN_H2O_WBAMBQ,
+    Prop_good_quality_river = X6.3.2...Proportion.of.river.water.bodies.with.good.ambient.water.quality.......EN_H2O_RVAMBQ,
+    Prop_good_quality_groundwater = X6.3.2...Proportion.of.groundwater.bodies.with.good.ambient.water.quality.......EN_H2O_GRAMBQ,
+    Prop_good_quality_open_water = X6.3.2...Proportion.of.open.water.bodies.with.good.ambient.water.quality.......EN_H2O_OPAMBQ) %>%
+  mutate(
+    Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(
+    -Code)
+
+cat("Prop_good_quality_water - number of NA values:", sum(is.na(Water_quality$Prop_good_quality_water)), "| number of non-NA values:", sum(!is.na(Water_quality$Prop_good_quality_water)), "\n")
+
+cat("Prop_good_quality_river - number of NA values:", sum(is.na(Water_quality$Prop_good_quality_river)), "| number of non-NA values:", sum(!is.na(Water_quality$Prop_good_quality_river)), "\n")
+
+cat("Prop_good_quality_groundwater - number of NA values:", sum(is.na(Water_quality$Prop_good_quality_groundwater)), "| number of non-NA values:", sum(!is.na(Water_quality$Prop_good_quality_groundwater)), "\n")
+
+cat("Prop_good_quality_open_water - number of NA values:", sum(is.na(Water_quality$Prop_good_quality_open_water)), "| number of non-NA values:", sum(!is.na(Water_quality$Prop_good_quality_open_water)), "\n")
+
+## Surface_temp
+Surface_temp <- Surface_temp %>%
+    rename(
+      Avg_surface_temp = Average.surface.temperature,
+      Year = year) %>%
+  mutate(
+      Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(
+    -Code,
+    -Day,
+    -Average.surface.temperature.1) 
+
+cat("Surface_temp - number of NA values:", sum(is.na(Surface_temp$Avg_surface_temp)), "| number of non-NA values:", sum(!is.na(Surface_temp$Avg_surface_temp)), "\n")
+
+## Avg_precipitation
+Avg_precipitation <- Avg_precipitation %>%
+    rename(
+      Avg_precipitation = Annual.precipitation) %>%
+  mutate(
+      Entity = str_replace_all(str_trim(str_remove(Entity, "\\s*\\(.*\\)")), " ", "_")) %>%
+  select(
+    -Code) 
+
+cat("Avg_precipitation - number of NA values:", sum(is.na(Avg_precipitation$Avg_precipitation)), "| number of non-NA values:", sum(!is.na(Avg_precipitation$Avg_precipitation)), "\n")
+```
+
+```{r}
+glimpse(Annual_temp_annomalies)
+glimpse(Vaccine)
+glimpse(Sanitation)
+glimpse(Health_expenditure)
+glimpse(Pop_density)
+glimpse(Education_lvl)
+glimpse(Drinking_water)
+glimpse(Poverty_proxy)
+glimpse(Water_quality)
+glimpse(Surface_temp)
+glimpse(Avg_precipitation)
+```
+
+##2nd dataset: Feature dataset cleaning
+```{r}
+df_WDI <- WDI(country = "all", indicator = c(
+  "SH.STA.BASS.ZS",  # basic sanitation
+  "SH.XPD.CHEX.GD.ZS",  # health expenditure
+  "SP.POP.TOTL",  # population
+  "SE.PRM.CMPT.ZS", # education completion
+  "IN.POV.HH.DRNKNGWATER.RURL.PCT", # access to safe drinking water rural
+  "IN.POV.HH.DRNKNGWATER.TOTL.PCT", # access to safe drinking water total
+  "IN.POV.HH.DRNKNGWATER.URBN.PCT", # access to safe drinking water urban  
+  "EN.H2O.BDYS.ZS", # Proportion of bodies of water with good ambient water quality
+  "HOU.H2O.ACSN.ZS", # Household Access to Safe Water (in % of total household)
+  "IN.ENV.COASTALZONE.WATERBODIES.AREA", # IN.ENV.COASTALZONE.WATERBODIES.AREA
+  "SG.H2O.TM30.HH.ZS", #People using at least basic drinking water services (% of population): Q1 (lowest)
+  "SH.H2O.BASW.Q2.ZS", #People using at least basic drinking water services (% of population): Q2
+  "SH.H2O.BASW.Q3.ZS", #	People using at least basic drinking water services (% of population): Q3
+  "SH.H2O.BASW.Q4.ZS", #	People using at least basic drinking water services (% of population): Q4
+  "SH.H2O.BASW.Q5.ZS", #	People using at least basic drinking water services (% of population): Q5 (highest)
+  "SH.H2O.BASW.RU.ZS", # 	People using at least basic drinking water services, rural (% of rural population)
+  "SH.H2O.BASW.ZS", # 	People using at least basic drinking water services, urban (% of urban population)
+  "SH.H2O.SAFE.RU.ZS", # Improved water source, rural (% of rural population with access)
+  "SH.H2O.SAFE.UR.ZS", # Improved water source, urban (% of urban population with access)
+  "SH.H2O.SAFE.ZS", # 	Improved water source (% of population with access)
+  "1.0.HCount.Ofcl", # Official Moderate Poverty Rate-National
+  "AG.PRD.GLVSK.XD", #livestock production index
+  "AG.PRD.LVSK.XD",  #livestock production index
+  "2.0.cov.Wat", #Coverage: Water
+  "IN.ENV.COASTALZONE.WATERBODIES.PCT", #Ratio: Water bodies to total coastal area of state (%)
+  "6.0.GDP_current", #	GDP (current $)
+  "6.0.GDP_growth", #GDP growth (annual %)
+  "SH.STA.SMSS.ZS"), # safely managed sanitation
+  start = 1993, end = 2024)
+
+df_WDI <- df_WDI %>%
+  rename(
+    WDI_basic_sanitation = SH.STA.BASS.ZS,
+    WDI_health_expenditure = SH.XPD.CHEX.GD.ZS,
+    WDI_population = SP.POP.TOTL,
+    WDI_education_completion = SE.PRM.CMPT.ZS,
+    WDI_access_safe_water_rural = IN.POV.HH.DRNKNGWATER.RURL.PCT,
+    WDI_access_safe_water_total = IN.POV.HH.DRNKNGWATER.TOTL.PCT,
+    WDI_access_safe_water_urban = IN.POV.HH.DRNKNGWATER.URBN.PCT,
+    WDI_good_water_quality = EN.H2O.BDYS.ZS,
+    WDI_household_access_safe_water = HOU.H2O.ACSN.ZS,
+    WDI_coastal_water_area = IN.ENV.COASTALZONE.WATERBODIES.AREA,
+    WDI_water_q1 = SG.H2O.TM30.HH.ZS,
+    WDI_water_q2 = SH.H2O.BASW.Q2.ZS,
+    WDI_water_q3 = SH.H2O.BASW.Q3.ZS,
+    WDI_water_q4 = SH.H2O.BASW.Q4.ZS,
+    WDI_water_q5 = SH.H2O.BASW.Q5.ZS,
+    WDI_basic_water_rural = SH.H2O.BASW.RU.ZS,
+    WDI_basic_water_urban = SH.H2O.BASW.ZS,
+    #WDI_improved_water_rural = SH.H2O.SAFE.RU.ZS,
+    #WDI_improved_water_urban = SH.H2O.SAFE.UR.ZS,
+    #WDI_improved_water_total = SH.H2O.SAFE.ZS,
+    WDI_official_moderate_poverty = `1.0.HCount.Ofcl`,
+    WDI_livestock_production_index1 = AG.PRD.GLVSK.XD,
+    WDI_livestock_production_index2 = AG.PRD.LVSK.XD,
+    WDI_coverage_water = `2.0.cov.Wat`,
+    WDI_water_body_to_coastal_ratio = IN.ENV.COASTALZONE.WATERBODIES.PCT,
+    WDI_gdp_current = `6.0.GDP_current`,
+    WDI_gdp_growth = `6.0.GDP_growth`,
+    WDI_safely_managed_sanitation = SH.STA.SMSS.ZS,
+    Entity = country,
+    Year = year
+  )
+
+
+```
+# 1st dataset: Individual feature datasets combined into a single dataset based on entity and year columns
+```{r}
+feauture_data_list <- list(
+  Annual_temp_annomalies,
+  Vaccine,
+  Sanitation,
+  Health_expenditure,
+  Pop_density,
+  Education_lvl,
+  Drinking_water,
+  Poverty_proxy,
+  Water_quality,
+  Surface_temp,
+  Avg_precipitation
+)
+
+combined_features <- reduce(feauture_data_list, full_join, by = c("Entity", "Year"))
+```
+
+```{r}
+## identify which years are present in the datasets
+years_to_keep <- unique(na.omit(outcome_variable_pr_data$Year))
+
+## filter the feature datasets to match the years of the PR malaria dataset
+combined_features_filtered <- combined_features %>%
+  filter(Year %in% years_to_keep | (is.na(Year) & any(is.na(years_to_keep))))
+```
+
+```{r}
+# Averaged values if there are multiple entries for the same Entity-Year
+combined_features_filtered.cleaned <- combined_features_filtered %>%
+  group_by(Entity, Year) %>%
+  summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
+```
+
+```{r}
+## remove non-country regions
+combined_features_filtered.cleaned <- combined_features_filtered.cleaned %>%
+  filter(!Entity %in% c("World", "Africa", "Asia", "Europe", "Americas", "Sub-Saharan_Africa"))
+
+## harmonise the mismatches
+combined_features_filtered.cleaned$Entity <- combined_features_filtered.cleaned$Entity %>%
+  recode(
+    "Cote_d'Ivoire" = "Côte_d'Ivoire",
+    "Democratic_Republic_of_Congo" = "Democratic_Republic_of_the_Congo",
+    "Swaziland" = "Eswatini",
+    "Timor-Leste" = "East_Timor",  # or reverse depending on your PR dataset
+    "Burma" = "Myanmar"
+  )
+
+combined_features_filtered.cleaned
+```
+
+## Clean target dataset
+```{r}
+## Averaged examined, positive and PR values if there are multiple entries for the same country-year, if Rural/Urban data is present for one row but not for other, keep the known value
+outcome_variable_pr_data.cleaned <- outcome_variable_pr_data %>%
+  group_by(country, continent_id, Year, rural_urban) %>%
+  summarise(
+    examined = round(mean(examined, na.rm = TRUE)),
+    positive = round(mean(positive, na.rm = TRUE)),
+    pr = mean(pr, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+      country = str_replace_all(str_trim(str_remove(country, "\\s*\\(.*\\)")), " ", "_")) %>%
+  rename(
+    Continent = continent_id,
+    Entity = country
+  )
+
+```
+
+
+## !!HERE is the dataset needed for the second part
+## 1. First dataset = Combine target and feature datasets based on year and country
+```{r}
+df_1 <- outcome_variable_pr_data.cleaned %>%
+  inner_join(combined_features_filtered.cleaned, by = c("Entity", "Year")) %>%
+  inner_join(df_WDI, by = c("Entity", "Year"))
+
+## identify the number of NAs
+df_1 <- df_1 %>%
+  mutate(across(where(is.character), ~ na_if(.x, "UNKNOWN"))) %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.nan(.x), NA, .x)))
+```
+
+## Collapse duplicates (same Entity + Year)
+```{r}
+df_1 <- df_1 %>%
+  group_by(Entity, Year) %>%
+  summarise(
+    # Preserve categorical/contextual variables (adjust these to match your actual column names)
+    Continent = first(Continent),
+    rural_urban = first(rural_urban),
+    iso3c = first(iso3c),
+    iso2c = first(iso2c),
+
+    # Summarize numeric variables with mean
+    across(where(is.numeric), ~ mean(.x, na.rm = TRUE)),
+    .groups = "drop"
+  )
+```
+
+## Data preprocessing: Inspect the number of entries for each Entity
+```{r}
+df_1 %>%
+  group_by(Entity) %>%
+  summarise(years_available = list(sort(unique(Year)))) %>%
+  ungroup()
+
+
+```
+
+## Data preprocessing: Missingness (NA inspection per predictor and per data entry)
+```{r}
+## chekc the missingness per column
+na_percent_overall <- df_1 %>%
+  summarise(across(
+    everything(),
+    ~ round(mean(is.na(.)) * 100),
+    .names = "na_pct_{.col}"
+  ))
+
+na_percent_long <- na_percent_overall %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_percent") %>%
+  arrange(desc(na_percent))
+
+na_percent_long
+
+## check the missingness per row
+df_missing_per_row <- df_1 %>%
+  mutate(
+    na_count = rowSums(is.na(.)),
+    na_percent = round(rowSums(is.na(.)) / ncol(.) * 100, 2)
+  ) %>%
+  select(Entity, Year, na_count, na_percent) %>%
+  arrange(desc(na_percent))
+```
+
+## 1.1. Data preprocessing
+
+##Data preprocessing: missingness - exclusion of predictors with >42% of missingness
+```{r}
+# Identify columns with ≤ 50% missingness
+columns_to_keep <- na_percent_overall %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_percent") %>%
+  mutate(column = gsub("^na_pct_", "", column)) %>%
+  filter(na_percent <= 50) %>%
+  pull(column)
+
+# Filter df_1 to keep only those columns
+df_1 <- df_1 %>%
+  select(all_of(columns_to_keep))
+```
+
+## Data preprocessing: Multicolinearity (exclusion of highly correlated predictors)
+```{r}
+
+df_1.colnames <- df_1 %>%
+  select(where(is.numeric)) %>%
+  colnames()
+  
+
+df_1.cor <- df_1 %>%
+  select(all_of(df_1.colnames)) %>%
+  cor(use = "pairwise.complete.obs")
+
+## exclusion of highly correlated and redundant predictors
+df_1 <- df_1 %>%
+  select(
+    #-WDI_safely_managed_sanitation,
+    -WDI_water_q2,
+    -WDI_water_q3,
+    -WDI_water_q4,
+    -WDI_water_q5,
+    -WDI_basic_water_rural,
+    -Share_pop_safe_sanitation
+  )
+
+df_1$rural_urban[df_1$rural_urban == "PERI_URBAN"] <- "URBAN"
+
+```
+
+## 1st MODEL: XGBoost 
+```{r}
+## inspect the annual data points before the split
+df_1 %>%
+  mutate(period = ifelse(Year <= 2010, "Train (≤2010)", "Test (>2010)")) %>%
+  count(period)
+
+## convert variables to the appropriate data type
+
+df_1.xgboost <- df_1 %>%
+  select(
+    Entity,
+    Year,
+    Share_vaccinated_children,
+    Pop_density,
+    Avg_surface_temp,
+    Avg_precipitation,
+    WDI_basic_sanitation,
+    WDI_health_expenditure,
+    WDI_population,
+    WDI_education_completion,
+    WDI_basic_water_urban,
+    WDI_livestock_production_index2,
+    Temp_anomaly,
+    pr,
+    rural_urban) %>%
+  mutate(
+    Entity = as.factor(Entity),
+    rural_urban = as.factor(rural_urban),
+    Year = as.numeric(Year),
+    Share_vaccinated_children = as.numeric(Share_vaccinated_children),
+    Pop_density = as.numeric(Pop_density),
+    Avg_surface_temp = as.numeric(Avg_surface_temp),
+    Avg_precipitation = as.numeric(Avg_precipitation),
+    WDI_basic_sanitation = as.numeric(WDI_basic_sanitation),
+    WDI_health_expenditure = as.numeric(WDI_health_expenditure),
+    WDI_population = as.numeric(WDI_population),
+    WDI_education_completion = as.numeric(WDI_education_completion),
+    WDI_basic_water_urban = as.numeric(WDI_basic_water_urban),
+    WDI_livestock_production_index2 = as.numeric(WDI_livestock_production_index2),
+    Temp_anomaly = as.numeric(Temp_anomaly),
+    pr = as.numeric(pr)) %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.nan(.x), NA, .x)))
+
+##write.csv(df_1.xgboost, "D:\\NUIG\\AI challenge\\datasets\\Malaria_dataset.csv")
+
+# 1. Define training and test sets based on year
+df_1.xgboost.train <- df_1.xgboost %>% filter(Year <= 2010) # 394
+df_1.xgboost.test  <- df_1.xgboost %>% filter(Year > 2010) # 153 (~72% goes towards training, the rest towards testing)
+
+
+# 2. Additional preprocessing steps using recipe function
+xgb_recipe <- recipe(pr ~ ., data = df_1.xgboost.train) %>%
+  update_role(Entity, new_role = "id") %>% # Exclude country as ID
+  step_ns(Year, deg_free = 4) %>% # Encode nonlinear time trend
+  ## XGBoost handles missing data by default so no imputation was used
+  #step_impute_bag(all_numeric_predictors(), trees = 100, seed_val = 123) %>%  # Impute missing numerics
+  step_unknown(all_nominal_predictors()) %>% # Handle unknown categories in test
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% # One-hot encoding
+  step_normalize(all_numeric_predictors()) %>% # Normalize numerics (optional for trees)
+  step_zv(all_predictors()) %>% # Remove zero-variance predictors
+  step_nzv(all_predictors()) # Remove near-zero variance predictors
+
+## 3. Cross validation
+set.seed(123)
+cv_folds <- vfold_cv(df_1.xgboost.train, strata = pr, repeats = 10)
+
+######################## RUN ONLY ONCE ###################################
+# library(doParallel)
+# num_cores <- detectCores() - 1
+# registerDoParallel(cores = num_cores)
+# ncores <- 30
+# 
+# library(doParallel)
+# Cluster <- makeCluster(detectCores() - 1)
+# clusterEvalQ(Cluster, library(foreach))
+# clusterEvalQ(Cluster, library(recipes))
+# clusterEvalQ(Cluster, library(tidymodels))
+# clusterEvalQ(Cluster, library(xgboost))
+# clusterEvalQ(Cluster, library(Metrics))
+# 
+# registerDoParallel(Cluster)
+##########################################################################
+
+
+# 4. XGBoost model with tuning
+xgb_model <- boost_tree(
+  trees = tune(),
+  learn_rate = tune(),
+  tree_depth = tune(),
+  min_n = tune(),
+  loss_reduction = tune(),
+  sample_size = tune(),
+  mtry = tune()
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+# 5. Workflow
+workflow.xgboost <- workflow() %>%
+  add_recipe(xgb_recipe) %>%
+  add_model(xgb_model)
+
+# 6. Define tuning grid
+xgboost_params <- parameters(
+  trees(range = c(500, 1500)),
+  learn_rate(),
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), df_1.xgboost.train)
+)
+
+## !NOTE: Load xgboost_model_results.rds instead of training the model to save time
+
+################################### START ######################################
+
+set.seed(321)
+# Start timing
+start_time <- Sys.time()
+xgboost_tune <- workflow.xgboost %>%
+  tune_bayes(
+    resamples = cv_folds,
+    param_info = xgboost_params,
+    iter = 100,
+    metrics = metric_set(rmse, mae, rsq),
+    control = control_bayes(no_improve = 25, save_pred = TRUE, verbose = TRUE),
+    initial = 10
+  )
+  
+end_time <- Sys.time()
+  
+end_time - start_time ## Time difference of 1.828281 hours
+
+########## IF NEEDED ############
+# stopCluster(Cluster)
+# registerDoSEQ()
+# on.exit(stopCluster(Cluster))
+#################################
+  
+# 8. Finalize the best model
+best_params <- select_best(xgboost_tune, metric = "rmse")
+
+final_xgb <- finalize_workflow(workflow.xgboost, best_params)
+
+# 9. Fit final model to training data
+xgb_fit_final <- fit(final_xgb, data = df_1.xgboost.train)
+
+# 10. Predict on test (future) data
+xgb_predictions <- predict(xgb_fit_final, df_1.xgboost.test) %>%
+  bind_cols(df_1.xgboost.test %>% select(pr, Year, Entity))
+
+# 11. Evaluate performance
+Xgb_metrics <- metrics(xgb_predictions, truth = pr, estimate = .pred)
+
+Xgb_metrics
+################################# END ##########################################
+```
+##Save model results
+```{r}
+
+## Load the xgboost_model_results here and start from the next chunk of code
+
+  xgboost_model_results <- list(
+    model_recipe = xgb_recipe,
+    cv_folds = cv_folds,
+    xgb_model = xgb_model,
+    workflow.xgboost = workflow.xgboost,
+    xgboost_params = xgboost_params,
+    xgboost_tune = xgboost_tune,
+    rmse = select_best(xgboost_tune, metric = "rmse"),
+    mae = select_best(xgboost_tune, metric = "mae"),
+    rsq = select_best(xgboost_tune, metric = "rsq"),
+    Xgb_metrics = Xgb_metrics
+  )
+
+##saveRDS(xgboost_model_results, "D:\\NUIG\\AI challenge\\Results\\XGBoost_results.rds")
+```
+## Feature importance: SHAP tool
+```{r}
+xgboost_shapviz <- shapviz::shapviz(
+  extract_fit_engine(xgb_fit_final), 
+  X_pred = bake(
+     prep(xgb_recipe),
+    has_role("predictor"),
+    new_data = df_1.xgboost.train,
+    composition = "matrix"), interactions = TRUE)
+
+xgboost_shapviz$S <- -xgboost_shapviz$S
+
+# # Plot SHAP values
+# Store SHAP plots as variables
+shapviz::sv_importance(xgboost_shapviz, kind = "beeswarm", max_display = 50) +
+  ggplot2::theme_minimal()
+shapviz::sv_importance(xgboost_shapviz, kind = "bar", max_display = 50) +
+  ggplot2::theme_minimal()
+shapviz::sv_dependence(xgboost_shapviz, v= "WDI_population") +
+  ggplot2::theme_minimal()
+
+shapviz::sv_dependence(xgboost_shapviz, v = "Year_ns_1") +
+  ggplot2::theme_minimal()
+shapviz::sv_dependence(xgboost_shapviz, v = "Year_ns_2") +
+  ggplot2::theme_minimal()
+shapviz::sv_dependence(xgboost_shapviz, v = "Year_ns_3") +
+  ggplot2::theme_minimal()
+shapviz::sv_dependence(xgboost_shapviz, v = "Year_ns_4") +
+  ggplot2::theme_minimal()
+```
+
+
+##PART 2: 
+## Descriptive statistics
+```{r}
+country_pr_descriptive <- df_1.xgboost %>%
+  group_by(Entity) %>%
+  summarise(
+    n_years = n_distinct(Year),
+    mean_pr = round(mean(pr, na.rm = TRUE), 3),
+    sd_pr = round(sd(pr, na.rm = TRUE), 3),
+    min_pr = round(min(pr, na.rm = TRUE), 3),
+    max_pr = round(max(pr, na.rm = TRUE), 3)
+  ) %>%
+  arrange(desc(mean_pr))
+
+print(country_pr_descriptive)
+
+##write.csv(country_pr_descriptive, "D:\\NUIG\\AI challenge\\Results\\country_pr_descriptive.csv")
+```
+## 
+```{r}
+# Create PR categories
+df_plots <- df_1.xgboost %>%
+
+  mutate(pr_percent = pr * 100)
+
+df_plots <- df_plots %>%
+  mutate(pr_category = case_when(
+    pr_percent < 10 ~ "<10%",
+    pr_percent >= 10 & pr_percent <= 50 ~ "10–50%",
+    pr_percent > 50 ~ ">50%",
+    TRUE ~ NA_character_
+  ))
+
+table(df_plots$pr_category)
+
+
+heatmap <- ggplot(df_plots, aes(x = Year, y = reorder(Entity, -pr_percent), fill = pr_percent)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "C") +
+  labs(title = "Malaria PR Heatmap", x = "Year", y = "Country", fill = "PR (%)") +
+  theme_minimal()
+
+heatmap
+
+ggplot(df_plots, aes(x = Year, y = pr_percent)) +
+  geom_line(color = "steelblue") +
+  facet_wrap(~ Entity, scales = "free_y") +
+  labs(title = "Malaria PR Trends by Country", y = "PR (%)", x = "Year") +
+  theme_minimal()
+
+```
+
+## Smoothed PR Trends (LOESS) for top 12 countries
+```{r}
+top_countries <- df_1.xgboost %>%
+  group_by(Entity) %>%
+  summarise(n_years = n_distinct(Year)) %>%
+  top_n(12, n_years) %>%
+  pull(Entity)
+
+df_1.xgboost %>%
+  filter(Entity %in% top_countries, !is.na(pr)) %>%
+  ggplot(aes(x = Year, y = pr)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue", span = 0.75) +
+  facet_wrap(~ Entity, scales = "free_y") +
+  labs(title = "Smoothed Malaria PR Trends (Top 12 Countries)", y = "Malaria PR", x = "Year") +
+  theme_minimal()
+```
+##Top 12 countries and the trend of predictors over the years
+```{r}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Step 1: Get top 12 countries with most years of data
+top_countries <- df_1.xgboost %>%
+  group_by(Entity) %>%
+  summarise(n_years = n_distinct(Year)) %>%
+  top_n(12, n_years) %>%
+  pull(Entity)
+
+# Step 2: Filter data for those top countries
+df_top <- df_1.xgboost %>%
+  filter(Entity %in% top_countries)
+
+# Step 3: Select and normalize numeric columns using min-max scaling
+df_scaled <- df_top %>%
+  select(Entity, Year, Avg_surface_temp, Share_vaccinated_children,
+         WDI_basic_sanitation, Avg_precipitation) %>%
+  pivot_longer(cols = -c(Entity, Year), names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable) %>%
+  mutate(Value_scaled = (Value - min(Value, na.rm = TRUE)) / 
+                        (max(Value, na.rm = TRUE) - min(Value, na.rm = TRUE))) %>%
+  ungroup()
+
+# Step 4: Plot with scaled values
+ggplot(df_scaled, aes(x = Year, y = Value_scaled, color = Variable, group = Variable)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ Entity, scales = "free_x") +
+  theme_minimal() +
+  labs(
+    y = "Scaled Value (0–1)",
+    x = "Year",
+    color = "Variable"
+  )
+
+```
+## Calculate average PR per country
+```{r}
+map_data <- df_1.xgboost %>%
+  group_by(Entity) %>%
+  summarise(mean_pr = mean(pr, na.rm = TRUE)) %>%
+  ungroup()
+
+# Load world map shapefile and prepare for join
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+
+# Join malaria data to spatial map
+world_map <- world %>%
+  left_join(map_data, by = c("name" = "Entity"))
+
+# Plot
+ggplot(world_map) +
+  geom_sf(aes(fill = mean_pr), color = "gray80") +
+  viridis::scale_fill_viridis(option = "C", na.value = "lightgray", name = "Mean PR") +
+  theme_minimal() +
+  labs(
+    title = "Average Malaria parasite rate by Country",
+  )
+```
+
+
